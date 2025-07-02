@@ -2,8 +2,10 @@ QT += core gui widgets
 CONFIG += c++17
 TARGET = Sniffer
 
-SOURCES += main.cpp mainwindow.cpp
-HEADERS += mainwindow.h
+SOURCES += main.cpp mainwindow.cpp \
+    http_parser.cpp
+HEADERS += mainwindow.h \
+    http_parser.h
 FORMS += mainwindow.ui
 
 # Для Windows
