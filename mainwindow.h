@@ -17,7 +17,10 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+// Предотвращаем переопределение макроса
+#ifndef HAVE_REMOTE
 #define HAVE_REMOTE
+#endif
 #include <pcap.h>
 #else
 #include <pcap.h>
@@ -26,6 +29,9 @@
 
 #include "tcp_stream_assembler.h"
 #include "http_parser.h"
+
+// Остальная часть файла остается без изменений
+// ...
 
 // Объявляем поток для захвата пакетов
 class CaptureThread : public QThread {

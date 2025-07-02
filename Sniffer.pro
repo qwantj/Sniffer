@@ -27,7 +27,7 @@ win32 {
     LIBS += -L"c:/npcap/Lib/x64" -lwpcap -lPacket -lws2_32
 
     # Windows-специфичные определения
-    DEFINES += WIN32 _CONSOLE WPCAP HAVE_REMOTE
+    DEFINES += WIN32 _CONSOLE WPCAP HAVE_REMOTE _WINSOCK_DEPRECATED_NO_WARNINGS
 } else {
     # Флаги для GCC/Clang (Unix-подобные системы)
     QMAKE_CXXFLAGS += -Wall

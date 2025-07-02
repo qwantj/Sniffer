@@ -1,6 +1,7 @@
 #include "http_parser.h"
 #include <sstream>
 #include <algorithm>
+#include <cstring>
 
 bool HTTPParser::isHTTP(const unsigned char* data, size_t size) {
     if (size < 10) return false;
@@ -22,21 +23,26 @@ bool HTTPParser::isHTTP(const unsigned char* data, size_t size) {
     return false;
 }
 
-HTTPParser::HTTPMethod HTTPParser::stringToMethod(const std::string& method) {
-    if (method == "GET") return GET;
-    if (method == "POST") return POST;
-    if (method == "PUT") return PUT;
-    if (method == "DELETE") return DELETE;
-    if (method == "HEAD") return HEAD;
-    if (method == "OPTIONS") return OPTIONS;
-    return UNKNOWN;
+HTTPMethod HTTPParser::stringToMethod(const std::string& method) {
+    if (method == "GET") return HTTP_GET;
+    if (method == "POST") return HTTP_POST;
+    if (method == "PUT") return HTTP_PUT;
+    if (method == "DELETE") return HTTP_DELETE;
+    if (method == "HEAD") return HTTP_HEAD;
+    if (method == "OPTIONS") return HTTP_OPTIONS;
+    return HTTP_UNKNOWN;
 }
 
-HTTPParser::HTTPMessage HTTPParser::parseHTTP(const unsigned char* data, size_t size) {
+HTTPMessage HTTPParser::parseHTTP(const unsigned char* data, size_t size) {
     HTTPMessage message;
     std::string httpData(reinterpret_cast<const char*>(data), size);
     std::istringstream stream(httpData);
     std::string line;
+
+    // Инициализируем значения по умолчанию
+    message.isRequest = false;
+    message.method = HTTP_UNKNOWN;
+    message.statusCode = 0;
 
     // Разбор первой строки
     if (std::getline(stream, line)) {

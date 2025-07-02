@@ -16,7 +16,7 @@
 #include <QInputDialog>
 #include <QSplitter>
 #include <QGroupBox>
-
+#include <iostream>
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -71,7 +71,7 @@ void CaptureThread::onHttpMessage(const StreamKey &key, const std::vector<uint8_
     if (HTTPParser::isHTTP(data.data(), data.size())) {
         httpCount++;
 
-        HTTPParser::HTTPMessage message = HTTPParser::parseHTTP(data.data(), data.size());
+        HTTPMessage message = HTTPParser::parseHTTP(data.data(), data.size());
 
         // Получаем IP-адреса в читаемом формате
         char srcIP[INET_ADDRSTRLEN];
@@ -89,12 +89,12 @@ void CaptureThread::onHttpMessage(const StreamKey &key, const std::vector<uint8_
         if (message.isRequest) {
             QString method;
             switch (message.method) {
-            case HTTPParser::GET: method = "GET"; break;
-            case HTTPParser::POST: method = "POST"; break;
-            case HTTPParser::PUT: method = "PUT"; break;
-            case HTTPParser::DELETE: method = "DELETE"; break;
-            case HTTPParser::HEAD: method = "HEAD"; break;
-            case HTTPParser::OPTIONS: method = "OPTIONS"; break;
+            case HTTP_GET: method = "GET"; break;
+            case HTTP_POST: method = "POST"; break;
+            case HTTP_PUT: method = "PUT"; break;
+            case HTTP_DELETE: method = "DELETE"; break;
+            case HTTP_HEAD: method = "HEAD"; break;
+            case HTTP_OPTIONS: method = "OPTIONS"; break;
             default: method = "UNKNOWN"; break;
             }
             info = method + " " + QString::fromStdString(message.uri) + " " +
