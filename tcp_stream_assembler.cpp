@@ -1,5 +1,4 @@
 #include "tcp_stream_assembler.h"
-#include <ctime>
 #include <cstring>
 #include <algorithm>
 

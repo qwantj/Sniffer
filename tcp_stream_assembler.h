@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <ctime>
 
 struct StreamKey {
     uint32_t srcIP;

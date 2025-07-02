@@ -1,45 +1,56 @@
+# Sniffer.pro - QMake проектный файл для сниффера с поддержкой HTTP
+
 QT += core gui widgets
+
+TARGET = sniffer
 CONFIG += c++17
-TARGET = Sniffer
+CONFIG += warn_on
 
-SOURCES += main.cpp mainwindow.cpp \
-    http_parser.cpp
+TEMPLATE = app
+
+SOURCES += main.cpp \
+           mainwindow.cpp \
+           tcp_stream_assembler.cpp \
+           http_parser.cpp
+
 HEADERS += mainwindow.h \
-    http_parser.h
-FORMS += mainwindow.ui
+           tcp_stream_assembler.h \
+           http_parser.h
 
-# Для Windows
+# Флаги компилятора в зависимости от платформы
 win32 {
-    # Автопоиск Npcap
-    NPCAP_DIR = $$(NPCAP_DIR)
-    isEmpty(NPCAP_DIR) {
-        exists(C:/npcap) {
-            NPCAP_DIR = C:/npcap
-        } else:exists(C:/Program Files/Npcap) {
-            NPCAP_DIR = "C:/Program Files/Npcap"
-        }
-    }
+    # Флаги для MSVC (Windows)
+    QMAKE_CXXFLAGS += /W4
 
-    exists($$NPCAP_DIR) {
-        INCLUDEPATH += "$$NPCAP_DIR/include"
-        LIBS += -L"$$NPCAP_DIR/Lib/x64" -lwpcap -lPacket
-    }
+    # Обновленный путь к Npcap
+    INCLUDEPATH += "c:/npcap/Include"
+    LIBS += -L"c:/npcap/Lib/x64" -lwpcap -lPacket -lws2_32
 
-    # Обязательные системные библиотеки
-    LIBS += -lWs2_32 -lIphlpapi
+    # Windows-специфичные определения
+    DEFINES += WIN32 _CONSOLE WPCAP HAVE_REMOTE
+} else {
+    # Флаги для GCC/Clang (Unix-подобные системы)
+    QMAKE_CXXFLAGS += -Wall
+
+    # Unix/Linux библиотеки
+    LIBS += -lpcap
 }
 
-# Для MSVC
-win32-msvc {
-    QMAKE_CXXFLAGS += /std:c++17
-    LIBS += ws2_32.lib iphlpapi.lib
-
-    contains(QMAKE_TARGET.arch, x86_64) {
-        LIBS += wpcap.lib Packet.lib
-    }
+# Дополнительные опции для отладки
+CONFIG(debug, debug|release) {
+    DEFINES += DEBUG
+    message("Debug build")
 }
 
-# Для MinGW
-win32-g++ {
-    LIBS += -lwpcap -lPacket -lws2_32
+CONFIG(release, debug|release) {
+    DEFINES += NDEBUG QT_NO_DEBUG
+    win32:QMAKE_CXXFLAGS += /O2
+    else:QMAKE_CXXFLAGS += -O2
+    message("Release build")
+}
+
+# Инструкции для установки
+unix {
+    target.path = /usr/local/bin
+    INSTALLS += target
 }

@@ -2,52 +2,133 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QTimer>
 #include <QThread>
+#include <QStandardItemModel>
+#include <QMap>
+#include <QLabel>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QTableView>
+#include <QTextEdit>
+
+// Подключаем WinPcap/Npcap с учётом платформы
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#define HAVE_REMOTE
 #include <pcap.h>
+#else
+#include <pcap.h>
+#include <unistd.h>
+#endif
 
-QT_BEGIN_NAMESPACE
-namespace Ui { class MainWindow; }
-QT_END_NAMESPACE
+#include "tcp_stream_assembler.h"
+#include "http_parser.h"
 
-class CaptureThread : public QThread
-{
+// Объявляем поток для захвата пакетов
+class CaptureThread : public QThread {
     Q_OBJECT
+
 public:
-    explicit CaptureThread(QObject *parent = nullptr, const QString &deviceName = QString());
+    explicit CaptureThread(QObject *parent = nullptr);
     ~CaptureThread();
-    void stop();
+
+    void setInterface(const QString &interfaceName);
+    void setFilter(const QString &filter);
+    void stopCapture();
 
 signals:
-    void packetCaptured(QString timestamp, QString src, QString dst, QString protocol, int length);
-    void errorOccurred(QString message);
+    void packetCaptured(const QString &protocol,
+                        const QString &srcIp, const QString &srcPort,
+                        const QString &dstIp, const QString &dstPort,
+                        int dataLength);
+    void httpMessageCaptured(const QString &type,
+                             const QString &srcIp, const QString &srcPort,
+                             const QString &dstIp, const QString &dstPort,
+                             const QString &info, const QString &headers,
+                             const QString &body);
+    void error(const QString &message);
+    void statisticsUpdated(int total, int tcp, int udp, int http);
 
 protected:
     void run() override;
 
 private:
-    pcap_t *handle;     // Порядок объявления важен!
-    bool abort;
-    QString deviceName;
+    QString interfaceName;
+    QString filterExpr;
+    volatile bool running;
+    pcap_t *handle;
+    int packetCount;
+    int tcpCount;
+    int udpCount;
+    int httpCount;
+    TCPStreamAssembler *tcpAssembler;
+
+    static void packetHandler(u_char *userData, const struct pcap_pkthdr *pkthdr, const u_char *packet);
+    void processPacket(const pcap_pkthdr *pkthdr, const u_char *packet);
+    void onHttpMessage(const StreamKey &key, const std::vector<uint8_t> &data);
 };
 
-class MainWindow : public QMainWindow
-{
+// Главное окно приложения
+class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
 private slots:
-    void on_startButton_clicked();
-    void on_stopButton_clicked();
-    void updateTable(QString timestamp, QString src, QString dst, QString protocol, int length);
-    void handleError(QString message);
+    void startCapture();
+    void stopCapture();
+    void refreshInterfaces();
+    void showAbout();
+    void displaySettings();
+    void savePackets();
+    void clearPackets();
+
+    void onPacketCaptured(const QString &protocol,
+                          const QString &srcIp, const QString &srcPort,
+                          const QString &dstIp, const QString &dstPort,
+                          int dataLength);
+    void onHttpMessageCaptured(const QString &type,
+                               const QString &srcIp, const QString &srcPort,
+                               const QString &dstIp, const QString &dstPort,
+                               const QString &info, const QString &headers,
+                               const QString &body);
+    void onCaptureError(const QString &message);
+    void onStatisticsUpdated(int total, int tcp, int udp, int http);
+    void showPacketDetails(const QModelIndex &index);
 
 private:
-    Ui::MainWindow *ui;
+    // Интерфейс
+    QComboBox *interfaceCombo;
+    QLineEdit *filterEdit;
+    QPushButton *startButton;
+    QPushButton *stopButton;
+    QTableView *packetsTable;
+    QTextEdit *detailsText;
+    QLabel *statusLabel;
+    QLabel *statsLabel;
+
+    // Модель данных
+    QStandardItemModel *packetsModel;
+
+    // Поток захвата
     CaptureThread *captureThread;
-    void loadDevices();
+
+    // Список интерфейсов
+    QMap<QString, QString> interfaces;
+
+    // Инициализация UI
+    void setupUi();
+    void createActions();
+    void createMenus();
+    void createStatusBar();
+
+    // Загрузка списка интерфейсов
+    void loadInterfaces();
 };
 
 #endif // MAINWINDOW_H
