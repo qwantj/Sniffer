@@ -35,7 +35,7 @@
 // ------------------ Реализация CaptureThread ------------------
 
 CaptureThread::CaptureThread(QObject *parent) : QThread(parent),
-    running(false), handle(nullptr), packetCount(0), tcpCount(0),
+    running(false), capture(nullptr), packetCount(0), tcpCount(0),
     udpCount(0), httpCount(0), tcpAssembler(nullptr) {
 }
 
@@ -45,6 +45,10 @@ CaptureThread::~CaptureThread() {
 
     if (tcpAssembler) {
         delete tcpAssembler;
+    }
+    
+    if (capture) {
+        delete capture;
     }
 }
 
@@ -58,12 +62,53 @@ void CaptureThread::setFilter(const QString &filter) {
 
 void CaptureThread::stopCapture() {
     running = false;
+    if (capture) {
+        capture->stopCapture();
+    }
 }
 
-// Адаптер для вызова метода экземпляра из статической функции обратного вызова
-void CaptureThread::packetHandler(u_char *userData, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
-    CaptureThread *thread = reinterpret_cast<CaptureThread*>(userData);
-    thread->processPacket(pkthdr, packet);
+void CaptureThread::onPacketCaptured(const RawSocketCapture::PacketInfo &packet)
+{
+    packetCount++;
+    
+    // Подсчёт по протоколам
+    if (packet.protocol == "TCP") {
+        tcpCount++;
+        
+        // Передаем пакет в TCP сборщик для анализа HTTP
+        if (tcpAssembler && !packet.data.isEmpty()) {
+            tcpAssembler->processPacket(
+                packet.srcIPInt,
+                packet.dstIPInt,
+                packet.srcPortInt,
+                packet.dstPortInt,
+                packet.seqNum,
+                reinterpret_cast<const uint8_t*>(packet.data.constData()),
+                packet.data.size()
+            );
+        }
+    } else if (packet.protocol == "UDP") {
+        udpCount++;
+    }
+    
+    // Отправляем сигнал о захваченном пакете
+    emit packetCaptured(packet.protocol, packet.srcIp, packet.srcPort,
+                        packet.dstIp, packet.dstPort, packet.dataLength);
+    
+    // Периодическое обновление статистики
+    if (packetCount % 10 == 0) {
+        emit statisticsUpdated(packetCount, tcpCount, udpCount, httpCount);
+        
+        // Очистка старых потоков
+        if (tcpAssembler) {
+            tcpAssembler->clearOldStreams(300); // 5 минут
+        }
+    }
+}
+
+void CaptureThread::onCaptureError(const QString &message)
+{
+    emit error(message);
 }
 
 // Функция HTTP-обработчика для сборщика TCP-потоков
@@ -128,203 +173,6 @@ void CaptureThread::onHttpMessage(const StreamKey &key, const std::vector<uint8_
     }
 }
 
-void CaptureThread::processPacket(const pcap_pkthdr *pkthdr, const u_char *packet) {
-    packetCount++;
-
-#ifdef _WIN32
-    // Структуры для Windows
-    struct ether_header {
-        u_char ether_dhost[6];
-        u_char ether_shost[6];
-        u_short ether_type;
-    };
-
-    struct ip_header {
-        u_char  ip_vhl;
-        u_char  ip_tos;
-        u_short ip_len;
-        u_short ip_id;
-        u_short ip_off;
-        u_char  ip_ttl;
-        u_char  ip_p;
-        u_short ip_sum;
-        struct in_addr ip_src;
-        struct in_addr ip_dst;
-    };
-
-    struct tcp_header {
-        u_short th_sport;
-        u_short th_dport;
-        u_int   th_seq;
-        u_int   th_ack;
-        u_char  th_offx2;
-        u_char  th_flags;
-        u_short th_win;
-        u_short th_sum;
-        u_short th_urp;
-    };
-
-    struct udp_header {
-        u_short uh_sport;
-        u_short uh_dport;
-        u_short uh_len;
-        u_short uh_sum;
-    };
-
-// Константы для Windows
-#define IPPROTO_TCP 6
-#define IPPROTO_UDP 17
-
-    // Обработка для Windows
-    struct ether_header* ethHeader = (struct ether_header*)packet;
-    struct ip_header* ipHeader = (struct ip_header*)(packet + sizeof(struct ether_header));
-
-    if (ipHeader->ip_p == IPPROTO_TCP) {
-        tcpCount++;
-
-        // Получаем длину IP-заголовка
-        int ipHeaderLength = (ipHeader->ip_vhl & 0x0f) * 4;
-        struct tcp_header* tcpHeader = (struct tcp_header*)(packet + sizeof(struct ether_header) + ipHeaderLength);
-
-        // Получаем длину TCP-заголовка
-        int tcpHeaderLength = ((tcpHeader->th_offx2 & 0xf0) >> 4) * 4;
-
-        // Данные и их длина
-        const u_char* tcpData = packet + sizeof(struct ether_header) + ipHeaderLength + tcpHeaderLength;
-        int dataLength = ntohs(ipHeader->ip_len) - ipHeaderLength - tcpHeaderLength;
-
-        if (dataLength > 0) {
-            // IP-адреса и порты
-            QString srcIp = QString(inet_ntoa(ipHeader->ip_src));
-            QString dstIp = QString(inet_ntoa(ipHeader->ip_dst));
-            QString srcPort = QString::number(ntohs(tcpHeader->th_sport));
-            QString dstPort = QString::number(ntohs(tcpHeader->th_dport));
-
-            // Отправляем информацию о TCP пакете в основной поток
-            emit packetCaptured("TCP", srcIp, srcPort, dstIp, dstPort, dataLength);
-
-            // Передаем пакет в TCP сборщик для анализа HTTP
-            if (tcpAssembler) {
-                tcpAssembler->processPacket(
-                    ntohl(ipHeader->ip_src.s_addr),
-                    ntohl(ipHeader->ip_dst.s_addr),
-                    ntohs(tcpHeader->th_sport),
-                    ntohs(tcpHeader->th_dport),
-                    ntohl(tcpHeader->th_seq),
-                    tcpData,
-                    dataLength
-                    );
-            }
-        }
-    }
-    else if (ipHeader->ip_p == IPPROTO_UDP) {
-        udpCount++;
-
-        // Получаем длину IP-заголовка
-        int ipHeaderLength = (ipHeader->ip_vhl & 0x0f) * 4;
-        struct udp_header* udpHeader = (struct udp_header*)(packet + sizeof(struct ether_header) + ipHeaderLength);
-
-        // Данные и их длина
-        const u_char* udpData = packet + sizeof(struct ether_header) + ipHeaderLength + sizeof(struct udp_header);
-        int dataLength = ntohs(udpHeader->uh_len) - sizeof(struct udp_header);
-
-        if (dataLength > 0) {
-            // IP-адреса и порты
-            QString srcIp = QString(inet_ntoa(ipHeader->ip_src));
-            QString dstIp = QString(inet_ntoa(ipHeader->ip_dst));
-            QString srcPort = QString::number(ntohs(udpHeader->uh_sport));
-            QString dstPort = QString::number(ntohs(udpHeader->uh_dport));
-
-            // Отправляем информацию о UDP пакете в основной поток
-            emit packetCaptured("UDP", srcIp, srcPort, dstIp, dstPort, dataLength);
-        }
-    }
-#else
-    // Обработка для Unix/Linux
-    struct ethhdr* ethHeader = (struct ethhdr*)packet;
-    struct iphdr* ipHeader = (struct iphdr*)(packet + sizeof(struct ethhdr));
-
-    if (ipHeader->protocol == IPPROTO_TCP) {
-        tcpCount++;
-
-        // Рассчитываем смещение для TCP заголовка
-        int ipHeaderLength = ipHeader->ihl * 4;
-        struct tcphdr* tcpHeader = (struct tcphdr*)(packet + sizeof(struct ethhdr) + ipHeaderLength);
-
-        // Длина TCP заголовка
-        int tcpHeaderLength = tcpHeader->doff * 4;
-
-        // Рассчитываем указатель на данные и их длину
-        const u_char* tcpData = packet + sizeof(struct ethhdr) + ipHeaderLength + tcpHeaderLength;
-        int dataLength = ntohs(ipHeader->tot_len) - ipHeaderLength - tcpHeaderLength;
-
-        if (dataLength > 0) {
-            // IP-адреса и порты
-            struct in_addr src_addr, dst_addr;
-            src_addr.s_addr = ipHeader->saddr;
-            dst_addr.s_addr = ipHeader->daddr;
-
-            QString srcIp = QString(inet_ntoa(src_addr));
-            QString dstIp = QString(inet_ntoa(dst_addr));
-            QString srcPort = QString::number(ntohs(tcpHeader->source));
-            QString dstPort = QString::number(ntohs(tcpHeader->dest));
-
-            // Отправляем информацию о TCP пакете в основной поток
-            emit packetCaptured("TCP", srcIp, srcPort, dstIp, dstPort, dataLength);
-
-            // Передаем пакет в TCP сборщик для анализа HTTP
-            if (tcpAssembler) {
-                tcpAssembler->processPacket(
-                    ntohl(ipHeader->saddr),
-                    ntohl(ipHeader->daddr),
-                    ntohs(tcpHeader->source),
-                    ntohs(tcpHeader->dest),
-                    ntohl(tcpHeader->seq),
-                    tcpData,
-                    dataLength
-                    );
-            }
-        }
-    }
-    else if (ipHeader->protocol == IPPROTO_UDP) {
-        udpCount++;
-
-        // Рассчитываем смещение для UDP заголовка
-        int ipHeaderLength = ipHeader->ihl * 4;
-        struct udphdr* udpHeader = (struct udphdr*)(packet + sizeof(struct ethhdr) + ipHeaderLength);
-
-        // Рассчитываем указатель на данные и их длину
-        const u_char* udpData = packet + sizeof(struct ethhdr) + ipHeaderLength + sizeof(struct udphdr);
-        int dataLength = ntohs(udpHeader->len) - sizeof(struct udphdr);
-
-        if (dataLength > 0) {
-            // IP-адреса и порты
-            struct in_addr src_addr, dst_addr;
-            src_addr.s_addr = ipHeader->saddr;
-            dst_addr.s_addr = ipHeader->daddr;
-
-            QString srcIp = QString(inet_ntoa(src_addr));
-            QString dstIp = QString(inet_ntoa(dst_addr));
-            QString srcPort = QString::number(ntohs(udpHeader->source));
-            QString dstPort = QString::number(ntohs(udpHeader->dest));
-
-            // Отправляем информацию о UDP пакете в основной поток
-            emit packetCaptured("UDP", srcIp, srcPort, dstIp, dstPort, dataLength);
-        }
-    }
-#endif
-
-    // Периодическое обновление статистики
-    if (packetCount % 10 == 0) {
-        emit statisticsUpdated(packetCount, tcpCount, udpCount, httpCount);
-
-        // Очистка старых потоков
-        if (tcpAssembler) {
-            tcpAssembler->clearOldStreams(300); // 5 минут
-        }
-    }
-}
-
 void CaptureThread::run() {
     packetCount = 0;
     tcpCount = 0;
@@ -332,62 +180,40 @@ void CaptureThread::run() {
     httpCount = 0;
     running = true;
 
-    char errbuf[PCAP_ERRBUF_SIZE];
-
     // Создаем обработчик HTTP сообщений
     tcpAssembler = new TCPStreamAssembler([this](const StreamKey &key, const std::vector<uint8_t> &data) {
         this->onHttpMessage(key, data);
     });
 
-    // Открываем интерфейс для захвата
-    handle = pcap_open_live(interfaceName.toLocal8Bit().constData(), 65536, 1, 1000, errbuf);
-    if (!handle) {
-        emit error(QString("Не удалось открыть интерфейс %1: %2").arg(interfaceName).arg(errbuf));
+    // Создаем объект захвата
+    capture = new RawSocketCapture();
+    capture->setFilter(filterExpr);
+    
+    // Подключаем сигналы
+    connect(capture, &RawSocketCapture::packetCaptured,
+            this, &CaptureThread::onPacketCaptured);
+    connect(capture, &RawSocketCapture::error,
+            this, &CaptureThread::onCaptureError);
+
+    // Запускаем захват
+    if (!capture->startCapture(interfaceName)) {
+        emit error("Не удалось запустить захват пакетов");
         return;
     }
 
-    // Компиляция фильтра
-    struct bpf_program fp;
-    if (!filterExpr.isEmpty()) {
-        if (pcap_compile(handle, &fp, filterExpr.toLocal8Bit().constData(), 0, PCAP_NETMASK_UNKNOWN) == -1) {
-            emit error(QString("Не удалось скомпилировать фильтр: %1").arg(pcap_geterr(handle)));
-            pcap_close(handle);
-            handle = nullptr;
-            return;
-        }
-
-        if (pcap_setfilter(handle, &fp) == -1) {
-            emit error(QString("Не удалось установить фильтр: %1").arg(pcap_geterr(handle)));
-            pcap_freecode(&fp);
-            pcap_close(handle);
-            handle = nullptr;
-            return;
-        }
-
-        pcap_freecode(&fp);
-    }
-
-    // Основной цикл захвата пакетов
+    // Основной цикл потока
     while (running) {
-        if (pcap_dispatch(handle, -1, packetHandler, reinterpret_cast<u_char*>(this)) == -1) {
-            if (running) { // Проверяем, что мы не остановились намеренно
-                emit error(QString("Ошибка при захвате пакетов: %1").arg(pcap_geterr(handle)));
-            }
-            break;
-        }
+        msleep(100); // Пауза для снижения нагрузки на процессор
     }
 
-    // Закрываем устройство захвата
-    if (handle) {
-        pcap_close(handle);
-        handle = nullptr;
+    // Останавливаем захват
+    if (capture) {
+        capture->stopCapture();
     }
 
     // Отправляем финальную статистику
     emit statisticsUpdated(packetCount, tcpCount, udpCount, httpCount);
 }
-
-// ------------------ Реализация MainWindow ------------------
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), captureThread(nullptr) {
     setupUi();
@@ -549,24 +375,14 @@ void MainWindow::loadInterfaces() {
     interfaceCombo->clear();
     interfaces.clear();
 
-    pcap_if_t *alldevs;
-    char errbuf[PCAP_ERRBUF_SIZE];
-
-    if (pcap_findalldevs(&alldevs, errbuf) == -1) {
-        QMessageBox::warning(this, "Ошибка", QString("Не удалось получить список интерфейсов: %1").arg(errbuf));
-        return;
-    }
-
-    for (pcap_if_t *d = alldevs; d != nullptr; d = d->next) {
-        QString name = d->name;
-        QString description = d->description ? d->description : "Нет описания";
-
-        interfaceCombo->addItem(description, name);
-        interfaces[description] = name;
-    }
-
-    pcap_freealldevs(alldevs);
-
+    // В нашей реализации используем системные интерфейсы через Qt
+    interfaceCombo->addItem("localhost (Симуляция)", "localhost");
+    interfaces["localhost (Симуляция)"] = "localhost";
+    
+    // Добавляем некоторые стандартные интерфейсы для демонстрации
+    interfaceCombo->addItem("Any Interface (Все интерфейсы)", "any");
+    interfaces["Any Interface (Все интерфейсы)"] = "any";
+    
     if (interfaceCombo->count() == 0) {
         interfaceCombo->addItem("Интерфейсы не найдены");
         startButton->setEnabled(false);
