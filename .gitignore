@@ -80,3 +80,9 @@ CMakeLists.txt.user*
 .rcc/
 .uic/
 /build*/
+
+# Additional executables
+sniffer
+socket_test
+test_capture
+*.cpp.backup
