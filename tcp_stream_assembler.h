@@ -6,6 +6,7 @@
 #include <string>
 #include <functional>
 #include <ctime>
+#include <cstdint>
 
 struct StreamKey {
     uint32_t srcIP;

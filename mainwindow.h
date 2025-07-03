@@ -13,22 +13,17 @@
 #include <QTableView>
 #include <QTextEdit>
 
-// Подключаем WinPcap/Npcap с учётом платформы
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
-// Предотвращаем переопределение макроса
-#ifndef HAVE_REMOTE
-#define HAVE_REMOTE
-#endif
-#include <pcap.h>
 #else
-#include <pcap.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #endif
 
 #include "tcp_stream_assembler.h"
 #include "http_parser.h"
+#include "rawsocketcapture.h"
 
 // Остальная часть файла остается без изменений
 // ...
@@ -61,19 +56,21 @@ signals:
 protected:
     void run() override;
 
+private slots:
+    void onPacketCaptured(const RawSocketCapture::PacketInfo &packet);
+    void onCaptureError(const QString &message);
+
 private:
     QString interfaceName;
     QString filterExpr;
     volatile bool running;
-    pcap_t *handle;
+    RawSocketCapture *capture;
     int packetCount;
     int tcpCount;
     int udpCount;
     int httpCount;
     TCPStreamAssembler *tcpAssembler;
 
-    static void packetHandler(u_char *userData, const struct pcap_pkthdr *pkthdr, const u_char *packet);
-    void processPacket(const pcap_pkthdr *pkthdr, const u_char *packet);
     void onHttpMessage(const StreamKey &key, const std::vector<uint8_t> &data);
 };
 
